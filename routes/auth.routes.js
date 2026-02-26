@@ -3,27 +3,31 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User.model");
 const router = express.Router();
 const bcrypt = require("bcryptjs");
+const logger = require("../logger");
 
-// Register
+// ── Register ──────────────────────────────────────────────────
 router.post("/register", async (req, res) => {
   try {
     const { name, email, password, phone, avatar } = req.body;
 
-    // Check if user exists
+    logger.info("Register attempt received", `Email: ${email}`);
+
+    // Check if user already exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
+      logger.warn("Registration rejected — email already in use", email);
       return res.status(400).json({ error: "User already exists" });
     }
 
-    // 🔐 HASH PASSWORD
+    // Hash password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Create new user with hashed password
+    // Create and save new user
     const user = new User({
       name,
       email,
-      password: hashedPassword, // ✅ hashed
+      password: hashedPassword,
       phone,
       avatar:
         avatar || `https://ui-avatars.com/api/?name=${name}&background=random`,
@@ -31,12 +35,14 @@ router.post("/register", async (req, res) => {
 
     await user.save();
 
-    // Generate token
+    // Generate JWT
     const token = jwt.sign(
       { userId: user._id, email: user.email },
       process.env.JWT_SECRET,
-      { expiresIn: "7d" },
+      { expiresIn: "7d" }
     );
+
+    logger.register(name, email);
 
     res.status(201).json({
       token,
@@ -50,59 +56,52 @@ router.post("/register", async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Registration error:", error);
+    logger.error("Registration error", error.message);
     res.status(500).json({ error: "Server error" });
   }
 });
 
-// Login
+// ── Login ─────────────────────────────────────────────────────
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // 1️⃣ Validate input
+    logger.info("Login attempt received", `Email: ${email}`);
+
+    // Validate input
     if (!email || !password) {
-      return res.status(400).json({
-        error: "Email and password are required",
-      });
+      logger.loginFailed(email || "N/A", "Missing email or password");
+      return res.status(400).json({ error: "Email and password are required" });
     }
 
-    // 2️⃣ Find user
+    // Find user
     const user = await User.findOne({ email: email.toLowerCase() });
-
     if (!user) {
-      return res.status(401).json({
-        error: "Invalid credentials",
-      });
+      logger.loginFailed(email, "No user found with this email");
+      return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // 3️⃣ Compare password
+    // Compare password
     const isMatch = await bcrypt.compare(password, user.password);
-
     if (!isMatch) {
-      return res.status(401).json({
-        error: "Invalid credentials",
-      });
+      logger.loginFailed(email, "Incorrect password");
+      return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // 4️⃣ Update user status
+    // Update user status
     user.status = "online";
     user.lastSeen = new Date();
     await user.save();
 
-    // 5️⃣ Generate JWT
+    // Generate JWT
     const token = jwt.sign(
-      {
-        userId: user._id.toString(),
-        email: user.email,
-      },
+      { userId: user._id.toString(), email: user.email },
       process.env.JWT_SECRET,
-      {
-        expiresIn: "7d",
-      },
+      { expiresIn: "7d" }
     );
 
-    // 6️⃣ Send response
+    logger.login(user.name, user.email);
+
     res.json({
       token,
       user: {
@@ -115,10 +114,8 @@ router.post("/login", async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Login error:", error);
-    res.status(500).json({
-      error: "Server error during login",
-    });
+    logger.error("Login error", error.message);
+    res.status(500).json({ error: "Server error during login" });
   }
 });
 

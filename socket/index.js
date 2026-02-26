@@ -2,6 +2,7 @@ const { Server } = require("socket.io");
 const chatHandler = require("./chat.handler");
 const authMiddleware = require("../middleware/auth.middleware");
 const User = require("../models/User.model");
+const logger = require("../logger");
 
 module.exports = function initSocket(server) {
   const io = new Server(server, {
@@ -13,19 +14,21 @@ module.exports = function initSocket(server) {
     pingInterval: 25000,
   });
 
-  // Authentication middleware
+  // Run JWT auth middleware before every socket connection
   io.use(authMiddleware);
 
   io.on("connection", async (socket) => {
-    console.log("User connected:", socket.user.name);
+    logger.socketConnect(socket.user.name, socket.id);
 
-    // Update user status in database
+    // Update status to online in the database
     await User.findByIdAndUpdate(socket.user._id, {
       status: "online",
       lastSeen: new Date(),
     });
 
-    // Broadcast to all clients that this user is online
+    logger.statusChanged(socket.user.name, "online");
+
+    // Notify all other connected clients that this user is now online
     socket.broadcast.emit("user_status_changed", {
       userId: socket.user._id,
       status: "online",
@@ -36,19 +39,22 @@ module.exports = function initSocket(server) {
       },
     });
 
-    // Initialize chat handlers
+    // Register all chat-related event listeners
     chatHandler(io, socket);
 
+    // Handle disconnection
     socket.on("disconnect", async () => {
-      console.log("User disconnected:", socket.user.name);
+      logger.socketDisconnect(socket.user.name, socket.id);
 
-      // Update user status in database
+      // Update status to offline in the database
       await User.findByIdAndUpdate(socket.user._id, {
         status: "offline",
         lastSeen: new Date(),
       });
 
-      // Broadcast offline status
+      logger.statusChanged(socket.user.name, "offline");
+
+      // Notify all other clients that this user went offline
       socket.broadcast.emit("user_status_changed", {
         userId: socket.user._id,
         status: "offline",
@@ -56,6 +62,4 @@ module.exports = function initSocket(server) {
       });
     });
   });
-
-  // return io;
 };
